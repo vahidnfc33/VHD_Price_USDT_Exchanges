@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import re
+import statistics
 
 ALLOWED_CHANNELS = ['@usdtyab']
 ALLOWED_ADMINS = []
@@ -39,6 +40,9 @@ MAIN_EXCHANGES = [
     "ایران اکسچنج",
     "ایرانیکارت",
 ]
+
+# Prices further than this fraction from the median are treated as bogus and hidden
+MAX_DEVIATION = 0.10
 
 
 def is_authorized_chat(chat_id, chat_username=None):
@@ -133,12 +137,28 @@ def is_main_exchange(name):
     return any(name.startswith(m) for m in MAIN_EXCHANGES)
 
 
+def parse_price(p):
+    price_raw = fa_to_en(p.get('قیمت', '').replace("تومان", "").replace(",", "").strip())
+    try:
+        return float(price_raw)
+    except ValueError:
+        return None
+
+
 def build_message():
     prices = fetch_prices()
     prices = sorted(prices, key=lambda x: farsi_sort_key(x.get('صرافی', '')))
 
     if not prices:
         return "❌ خطا در دریافت قیمت‌ها از سایت."
+
+    parsed = [parse_price(p) for p in prices if parse_price(p)]
+    if parsed:
+        median = statistics.median(parsed)
+        prices = [
+            p for p in prices
+            if parse_price(p) is None or abs(parse_price(p) - median) / median <= MAX_DEVIATION
+        ]
 
     message = (
         "💵 <b>جدیدترین قیمت تتر (USDT):</b>\n"
@@ -156,14 +176,10 @@ def build_message():
         price_str = "❌"
         price_val = None
 
-        price_raw = fa_to_en(p.get('قیمت', '').replace("تومان", "").replace(",", "").strip())
-
-        try:
-            price_val = float(price_raw)
+        price_val = parse_price(p)
+        if price_val is not None:
             price_str = f"{int(price_val):,}"
             valid_prices.append((name, price_val))
-        except:
-            pass
 
         entry_text = f"🔰 {name_linked}\n💰 قیمت: {price_str}\n\n"
 
